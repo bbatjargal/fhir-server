@@ -259,7 +259,7 @@ namespace Microsoft.Health.Fhir.CosmosDb.Features.Search
             chainedOptions.Expression = filterExpression;
 
             var chainedResults = await ExecuteSearchAsync<FhirCosmosResourceWrapper>(
-                _queryBuilder.BuildSqlQuerySpec(chainedOptions, new QueryBuilderOptions(includeExpressions, projection: includeExpressions.Any() ? QueryProjection.ReferencesOnly : QueryProjection.Id)),
+                _queryBuilder.BuildSqlQuerySpec(chainedOptions, new QueryBuilderOptions(includeExpressions, projection: includeExpressions.Any() ? QueryProjection.ReferencesOnly : QueryProjection.IdAndType)),
                 chainedOptions,
                 null,
                 null,
@@ -271,37 +271,41 @@ namespace Microsoft.Health.Fhir.CosmosDb.Features.Search
                 throw new InvalidSearchOperationException(string.Format(Resources.ChainedExpressionSubqueryLimit, _chainedSearchMaxSubqueryItemLimit));
             }
 
-            Expression[] chainedExpressionReferences;
-
-            if (!expression.Reversed)
+            if (!chainedResults.results.Any())
             {
-                // When normal chained expression we can filter using references in the parent object. e.g. Observation.subject
-                // The following expression constrains "subject" references on "Observation" with the ids that have matched the sub-query
-                chainedExpressionReferences = chainedResults.results.Select(x =>
-                        Expression.SearchParameter(
-                            expression.ReferenceSearchParameter,
-                            Expression.And(
-                                Expression.Equals(FieldName.ReferenceResourceId, null, x.Id),
-                                Expression.Equals(FieldName.ReferenceResourceType, null, filteredType))))
-                    .ToArray<Expression>();
+                return null;
             }
-            else
+
+            if (expression.Reversed)
             {
                 // When reverse chained, we take the ids and types from the child object and use it to filter the parent objects.
                 // e.g. Patient?_has:Group:member:_id=group1. In this case we would have run the query there Group.id = group1
                 // and returned the indexed entries for Group.member. The following query will use these items to filter the parent Patient query.
-                chainedExpressionReferences = chainedResults.results.SelectMany(x => x.ReferencesToInclude.Select(y => y)).Distinct()
-                           .Select(include => Expression.And(
-                                  Expression.SearchParameter(
-                                      _resourceIdSearchParameter,
-                                      Expression.Equals(FieldName.TokenCode, null, include.ResourceId)),
-                                  Expression.SearchParameter(
-                                      _resourceTypeSearchParameter,
-                                      Expression.Equals(FieldName.TokenCode, null, include.ResourceTypeName))))
-                .ToArray<Expression>();
+
+                IEnumerable<ResourceTypeAndId> resourceTypeAndIds = chainedResults.results.SelectMany(x => x.ReferencesToInclude.Select(y => y)).Distinct();
+
+                IEnumerable<MultiaryExpression> typeAndResourceExpressions = resourceTypeAndIds
+                    .GroupBy(x => x.ResourceTypeName)
+                    .Select(g =>
+                        Expression.And(
+                            Expression.SearchParameter(_resourceTypeSearchParameter, Expression.Equals(FieldName.TokenCode, null, g.Key)),
+                            Expression.Or(g.Select(m => Expression.SearchParameter(_resourceIdSearchParameter, Expression.Equals(FieldName.TokenCode, null, m.ResourceId))).ToList())));
+
+                return typeAndResourceExpressions.Count() == 1 ? typeAndResourceExpressions.First() : Expression.Or(typeAndResourceExpressions.ToArray());
             }
 
-            return chainedExpressionReferences.Length > 1 ? Expression.Or(chainedExpressionReferences) : chainedExpressionReferences.FirstOrDefault();
+            // When normal chained expression we can filter using references in the parent object. e.g. Observation.subject
+            // The following expression constrains "subject" references on "Observation" with the ids that have matched the sub-query
+
+            return Expression.SearchParameter(
+                expression.ReferenceSearchParameter,
+                Expression.Or(
+                    chainedResults.results
+                        .GroupBy(m => m.ResourceTypeName)
+                        .Select(g =>
+                            Expression.And(
+                                Expression.Equals(FieldName.ReferenceResourceType, null, g.Key),
+                                Expression.Or(g.Select(m => Expression.Equals(FieldName.ReferenceResourceId, null, m.ResourceId)).ToList()))).ToList()));
         }
 
         protected override async Task<SearchResult> SearchHistoryInternalAsync(
