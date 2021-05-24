@@ -57,9 +57,9 @@ BEGIN
 
     SET IDENTITY_INSERT dbo.ResourceChangeType ON
 
-    INSERT INTO dbo.ResourceChangeType (ResourceChangeTypeId, Name) VALUES (0, 'CREATION')
-    INSERT INTO dbo.ResourceChangeType (ResourceChangeTypeId, Name) VALUES (1, 'UPDATE')
-    INSERT INTO dbo.ResourceChangeType (ResourceChangeTypeId, Name) VALUES (2, 'DELETION')
+    INSERT INTO dbo.ResourceChangeType (ResourceChangeTypeId, Name) VALUES (0, 'Creation')
+    INSERT INTO dbo.ResourceChangeType (ResourceChangeTypeId, Name) VALUES (1, 'Update')
+    INSERT INTO dbo.ResourceChangeType (ResourceChangeTypeId, Name) VALUES (2, 'Deletion')
 
     SET IDENTITY_INSERT dbo.ResourceChangeType OFF 
 
@@ -149,8 +149,13 @@ BEGIN
       ,c.Timestamp
       ,c.ResourceId
       ,c.ResourceTypeId
+	  ,t.Name AS ResourceType
       ,c.ResourceVersion
-      ,c.ResourceChangeTypeId FROM dbo.ResourceChangeData c
+      ,c.ResourceChangeTypeId 
+	  ,ct.Name AS ResourceChangeType	  
+	  FROM dbo.ResourceChangeData c
+	  LEFT JOIN dbo.ResourceType t ON c.ResourceTypeId = t.ResourceTypeId
+	  LEFT JOIN dbo.ResourceChangeType ct ON c.ResourceChangeTypeId = ct.ResourceChangeTypeId
     WHERE c.Id >= @startId AND c.Id < @endId AND c.Timestamp <= DATEADD(millisecond, -@delayMilliseconds, sysutcdatetime()) ORDER BY c.Timestamp ASC
 END
 GO
